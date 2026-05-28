@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gray-900 text-white m-0 p-0 font-sans;
+}
+
+/* Улучшенные стили для ползунков */
+input[type="range"] {
+  @apply bg-gray-600 rounded-lg h-1;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  @apply appearance-none w-3 h-3 rounded-full bg-blue-500 cursor-pointer transition-transform hover:scale-110;
+}
+
+input[type="range"]::-moz-range-thumb {
+  @apply w-3 h-3 rounded-full bg-blue-500 cursor-pointer border-0 transition-transform hover:scale-110;
+}
+
+input[type="range"]:active::-webkit-slider-thumb {
+  @apply scale-125;
+}

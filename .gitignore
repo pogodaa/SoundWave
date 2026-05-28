@@ -1,0 +1,71 @@
+# =========================
+# SoundWave: единый .gitignore
+# frontend (Vite + React + TS) + backend (FastAPI)
+# =========================
+
+# ---- Зависимости и сборка (Node/Vite/TS) ----
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+.tsbuildinfo
+
+# ---- Python окружение и артефакты ----
+venv/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Окружение и секреты ----
+.env
+*.env
+!.env.example
+
+# ---- Логи и кэши ----
+*.log
+*.pid
+*.seed
+*.pid.lock
+Thumbs.db
+.DS_Store
+
+# ---- IDE / редакторы ----
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ---- Docker и временные файлы ----
+*.dockerignore
+tmp/
+temp/
+
+# ---- FastAPI / SQLAlchemy / Alembic ----
+# Миграции НЕ игнорируем, только кэш внутри versions
+backend/migrations/versions/__pycache__/
+
+# ---- Тесты и отчеты ----
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+
+# === Тестовые и временные файлы ===
+*.mp3
+*.wav
+test_jamendo.mp3
+test.mp3
+tmp/
+temp/
+
+# ---- Локальные служебные файлы ----
+*.local
