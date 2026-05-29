@@ -14,6 +14,11 @@ export default defineConfig({
         secure: false,
         // Не добавляем rewrite — пусть путь остаётся /api/v1/...
       },
+      '/static': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+      },
     },
   },
 })

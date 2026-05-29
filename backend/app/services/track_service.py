@@ -1,5 +1,6 @@
 # backend/app/services/track_service.py
 import logging
+import traceback
 from typing import Optional, List
 import asyncio
 from asyncio import Semaphore
@@ -28,6 +29,130 @@ logger = logging.getLogger(__name__)
 
 CACHE_TTL_HOURS = 6          # сколько часов считаем ссылку свежей
 POOL_SIZE = 50               # размер внутреннего пула треков
+SEARCH_JAMENDO_THRESHOLD = 12  # запасной порог (основной триггер — len < 20)
+JAMENDO_SEARCH_FETCH_LIMIT = 50
+DB_SEARCH_FETCH_LIMIT = 30       # выборка из БД до вызова Jamendo
+JAMENDO_SEARCH_MAX_ATTEMPTS = 3  # повторы при сетевых сбоях Jamendo
+
+
+def _normalize_meta_part(value: Optional[str]) -> str:
+    """Нормализует строку для ключа дедупликации по названию/исполнителю."""
+    if not value:
+        return ""
+    return " ".join(str(value).strip().lower().split())
+
+
+def _track_unique_key(track_dict: dict) -> tuple:
+    """Ключ уникальности: jamendo_id, иначе внутренний id, иначе title+artist."""
+    jamendo_id = track_dict.get("jamendo_id")
+    if jamendo_id is not None:
+        try:
+            return ("jamendo", int(jamendo_id))
+        except (TypeError, ValueError):
+            pass
+    track_id = track_dict.get("id")
+    if track_id is not None:
+        try:
+            return ("id", int(track_id))
+        except (TypeError, ValueError):
+            pass
+    return (
+        "meta",
+        _normalize_meta_part(track_dict.get("title")),
+        _normalize_meta_part(track_dict.get("artist_name")),
+    )
+
+
+def _is_playable_track_dict(track_dict: dict) -> bool:
+    """Трек можно воспроизвести (актуальная ссылка Jamendo)."""
+    return bool(track_dict.get("is_available"))
+
+
+def _append_unique_track(
+    merged: list[dict],
+    seen_keys: set[tuple],
+    track_dict: dict,
+) -> bool:
+    """Добавляет трек, если он ещё не в списке и доступен для воспроизведения."""
+    if not _is_playable_track_dict(track_dict):
+        return False
+    key = _track_unique_key(track_dict)
+    if key in seen_keys:
+        return False
+    # Тот же трек мог попасть ранее по meta-ключу без jamendo_id — не дублируем
+    jamendo_id = track_dict.get("jamendo_id")
+    if jamendo_id is not None:
+        jamendo_key = ("jamendo", int(jamendo_id))
+        if jamendo_key in seen_keys:
+            return False
+        seen_keys.add(jamendo_key)
+    seen_keys.add(key)
+    merged.append(track_dict)
+    return True
+
+
+def _jamendo_item_to_response_dict(item: dict) -> dict:
+    """Словарь ответа API из данных Jamendo, если запись ещё не подтянулась из БД."""
+    jamendo_id = int(item.get("id") or item.get("jamendo_id") or 0)
+    tags = item.get("tags") or []
+    if isinstance(tags, str):
+        tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
+    elif not isinstance(tags, list):
+        tags = []
+    return {
+        "id": item.get("db_id"),
+        "jamendo_id": jamendo_id,
+        "title": item.get("title") or item.get("name") or "Без названия",
+        "artist_name": item.get("artist_name") or "Неизвестный исполнитель",
+        "duration": int(item.get("duration") or 0),
+        "genre": item.get("genre") or (tags[0] if tags else None),
+        "tags": tags,
+        "audio_url": item.get("audio_url") or item.get("audio") or "",
+        "cover_url": item.get("cover_url") or item.get("image_url") or "/covers/default.png",
+        "is_user_uploaded": False,
+        "created_at": None,
+        "updated_at": None,
+        "is_available": True,
+    }
+
+
+async def _fetch_jamendo_search_results(query: str, fetch_limit: int) -> list[dict]:
+    """Запрашивает Jamendo с повторами; при ошибке возвращает уже полученные данные."""
+    jamendo_data: list[dict] = []
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, JAMENDO_SEARCH_MAX_ATTEMPTS + 1):
+        try:
+            batch = await search_tracks(query, fetch_limit)
+            if batch:
+                jamendo_data = batch
+            logger.info(
+                f"[SEARCH] Jamendo попытка {attempt}/{JAMENDO_SEARCH_MAX_ATTEMPTS}: "
+                f"получено {len(batch)} треков"
+            )
+            if len(jamendo_data) >= fetch_limit // 2 or attempt == JAMENDO_SEARCH_MAX_ATTEMPTS:
+                return jamendo_data
+        except Exception as e:
+            last_error = e
+            logger.error(
+                f"[SEARCH] Ошибка Jamendo (попытка {attempt}/{JAMENDO_SEARCH_MAX_ATTEMPTS}): "
+                f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+            )
+            if jamendo_data:
+                logger.warning(
+                    f"[SEARCH] Jamendo: возвращаем частичный результат ({len(jamendo_data)} треков) "
+                    f"после ошибки на попытке {attempt}"
+                )
+                return jamendo_data
+        if attempt < JAMENDO_SEARCH_MAX_ATTEMPTS:
+            await asyncio.sleep(0.4 * attempt)
+
+    if last_error and not jamendo_data:
+        logger.error(
+            f"[SEARCH] Jamendo: все попытки исчерпаны, данных нет. "
+            f"Последняя ошибка: {type(last_error).__name__}: {last_error}"
+        )
+    return jamendo_data
 
 
 async def _enrich_genre_async(jamendo_id: int, artist_name: str, track_title: str):
@@ -62,73 +187,194 @@ async def _enrich_genre_async(jamendo_id: int, artist_name: str, track_title: st
         logger.warning(f"Ошибка обогащения жанра для '{track_title}': {e}")
 
 
+async def _search_tracks_in_db(
+    db: AsyncSession,
+    query: str,
+    fetch_limit: int,
+) -> list[dict]:
+    """Поиск в PostgreSQL по названию, исполнителю и жанру (ILIKE), только is_available=True."""
+    normalized = query.strip()
+    if not normalized:
+        return []
+
+    conditions = []
+    full_pattern = f"%{normalized}%"
+    conditions.extend([
+        Track.title.ilike(full_pattern),
+        Artist.name.ilike(full_pattern),
+        Track.genre.ilike(full_pattern),
+    ])
+
+    for term in normalized.split():
+        term_pattern = f"%{term}%"
+        conditions.extend([
+            Track.title.ilike(term_pattern),
+            Artist.name.ilike(term_pattern),
+            Track.genre.ilike(term_pattern),
+        ])
+
+    stmt = (
+        select(Track, Artist.name.label("artist_name_for_response"))
+        .join(Artist, Track.artist_id == Artist.id, isouter=True)
+        .where(or_(*conditions))
+        .where(Track.is_available.is_(True))
+        .limit(fetch_limit)
+    )
+    result = await db.execute(stmt)
+    rows = result.all()
+
+    results: list[dict] = []
+    seen_keys: set[tuple] = set()
+    for track, artist_name in rows:
+        track_dict = _track_to_response_dict(track, artist_name)
+        _append_unique_track(results, seen_keys, track_dict)
+    return results
+
+
+async def _load_tracks_by_jamendo_ids(
+    db: AsyncSession,
+    jamendo_ids: List[int],
+    *,
+    only_available: bool = False,
+) -> list[tuple[Track, Optional[str]]]:
+    """Загружает треки из БД по списку jamendo_id."""
+    if not jamendo_ids:
+        return []
+    stmt = (
+        select(Track, Artist.name.label("artist_name_for_response"))
+        .join(Artist, Track.artist_id == Artist.id, isouter=True)
+        .where(Track.jamendo_id.in_(jamendo_ids))
+    )
+    if only_available:
+        stmt = stmt.where(Track.is_available.is_(True))
+    result = await db.execute(stmt)
+    return result.all()
+
+
 async def search_tracks_with_cache(
     db: AsyncSession,
     query: str,
     limit: int,
     background_tasks: BackgroundTasks
 ) -> list[dict]:
-    """Поиск треков с кэшированием."""
-    search_terms = query.split()
-    conditions = []
-    for term in search_terms:
-        conditions.append(Track.title.ilike(f"%{term}%"))
-        conditions.append(Artist.name.ilike(f"%{term}%"))
+    """Гибридный поиск: PostgreSQL -> Jamendo -> только воспроизводимые треки, до limit штук."""
+    merged: list[dict] = []
+    seen_keys: set[tuple] = set()
 
-    stmt = (
-        select(Track, Artist.name.label("artist_name_for_response"))
-        .join(Artist, Track.artist_id == Artist.id, isouter=True)
-        .where(or_(*conditions))
-        .limit(limit)
+    # 1. Поиск в БД (ограниченный лимит, без раннего slice до limit)
+    db_tracks = await _search_tracks_in_db(db, query, DB_SEARCH_FETCH_LIMIT)
+    for track_dict in db_tracks:
+        _append_unique_track(merged, seen_keys, track_dict)
+
+    logger.info(
+        f"[SEARCH] Запрос '{query}' → В БД (доступные): {len(db_tracks)}, "
+        f"в ответе: {len(merged)}. Вызываем Jamendo: {len(merged) < limit}"
     )
-    result = await db.execute(stmt)
-    rows = result.all()
-    db_tracks = []
-    for track, artist_name in rows:
-        track_dict = {
-            "id": track.id,
-            "jamendo_id": track.jamendo_id,
-            "title": track.title,
-            "artist_name": artist_name or "Неизвестный исполнитель",
-            "album_name": None,
-            "duration": track.duration,
-            "genre": track.genre,
-            "tags": track.tags or [],
-            "audio_url": track.audio_url,
-            "cover_url": track.image_url or "/covers/default.png",
-            "releasedate": None,
-            "is_user_uploaded": track.is_user_uploaded,
-            "created_at": track.added_at,
-            "updated_at": track.updated_at,
-            "is_available": track.is_available,
-        }
-        db_tracks.append(track_dict)
 
-    if len(db_tracks) >= limit:
-        logger.info(f"Найдено {len(db_tracks)} треков в БД (кэш)")
-        return db_tracks
+    # 2. Меньше limit уникальных — обязательно дополняем из Jamendo
+    if len(merged) < limit:
+        need_from_jamendo = limit - len(merged)
+        logger.info(
+            f"[SEARCH] В БД {len(merged)} < {limit}, нужно ещё ~{need_from_jamendo}. "
+            f"Запрашиваем Jamendo (namesearch/tags, limit={JAMENDO_SEARCH_FETCH_LIMIT})"
+        )
 
-    remaining = limit - len(db_tracks)
-    fetch_limit = int(remaining * 1.5)
-    logger.info(f"В БД только {len(db_tracks)} треков, запрашиваем ещё {fetch_limit} у Jamendo")
+        jamendo_data = await _fetch_jamendo_search_results(query, JAMENDO_SEARCH_FETCH_LIMIT)
+        logger.info(f"[SEARCH] Jamendo вернул {len(jamendo_data)} треков для запроса «{query}»")
 
-    try:
-        jamendo_data = await search_tracks(query, fetch_limit)
-    except Exception as e:
-        logger.error(f"Ошибка при поиске треков: {e}")
-        return db_tracks
+        # Уникальные треки из ответа Jamendo (без дублей по jamendo id)
+        unique_jamendo: list[dict] = []
+        seen_jamendo_raw: set[int] = set()
+        raw_by_jamendo_id: dict[int, dict] = {}
+        for item in jamendo_data:
+            raw_id = item.get("id") or item.get("jamendo_id")
+            if raw_id is None:
+                continue
+            try:
+                jamendo_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if jamendo_id in seen_jamendo_raw:
+                continue
+            seen_jamendo_raw.add(jamendo_id)
+            raw_by_jamendo_id[jamendo_id] = item
+            unique_jamendo.append(item)
 
-    if jamendo_data:
-        await _upsert_tracks(db, jamendo_data)
-        for t in jamendo_data:
-            background_tasks.add_task(
-                _enrich_genre_async,
-                jamendo_id=int(t["id"]),
-                artist_name=t.get("artist_name", "Unknown"),
-                track_title=t["title"]
+        logger.info(
+            f"[SEARCH] После дедуп Jamendo: {len(unique_jamendo)} уникальных "
+            f"(было {len(jamendo_data)})"
+        )
+
+        if unique_jamendo:
+            try:
+                await _upsert_tracks(db, unique_jamendo)
+                await db.commit()
+                logger.info(f"[SEARCH] Upsert Jamendo: сохранено/обновлено до {len(unique_jamendo)} треков")
+            except Exception as e:
+                logger.error(
+                    f"[SEARCH] Ошибка upsert Jamendo: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+                )
+
+            for t in unique_jamendo:
+                background_tasks.add_task(
+                    _enrich_genre_async,
+                    jamendo_id=int(t.get("id") or t.get("jamendo_id")),
+                    artist_name=t.get("artist_name", "Unknown"),
+                    track_title=t.get("title") or t.get("name", ""),
+                )
+
+            # Повторный SELECT из БД — свежие записи после upsert
+            jamendo_ids = [
+                int(t.get("id") or t.get("jamendo_id"))
+                for t in unique_jamendo
+                if t.get("id") is not None or t.get("jamendo_id") is not None
+            ]
+            rows = await _load_tracks_by_jamendo_ids(db, jamendo_ids, only_available=True)
+            rows_by_jamendo_id = {
+                track.jamendo_id: (track, artist_name)
+                for track, artist_name in rows
+                if track.jamendo_id is not None
+            }
+            logger.info(
+                f"[SEARCH] Повторный SELECT по jamendo_id: найдено {len(rows_by_jamendo_id)} "
+                f"из {len(jamendo_ids)} запрошенных"
             )
 
-    return db_tracks[:limit]
+            added_from_jamendo = 0
+            for jamendo_id in jamendo_ids:
+                if len(merged) >= limit:
+                    break
+                row = rows_by_jamendo_id.get(jamendo_id)
+                if row:
+                    track, artist_name = row
+                    track_dict = _track_to_response_dict(track, artist_name)
+                else:
+                    raw_item = raw_by_jamendo_id.get(jamendo_id)
+                    if not raw_item:
+                        continue
+                    track_dict = _jamendo_item_to_response_dict(raw_item)
+                    logger.debug(
+                        f"[SEARCH] Трек jamendo_id={jamendo_id} взят из ответа API "
+                        f"(нет строки в БД после upsert)"
+                    )
+                if _append_unique_track(merged, seen_keys, track_dict):
+                    added_from_jamendo += 1
+
+            logger.info(
+                f"[SEARCH] В merged добавлено из Jamendo: {added_from_jamendo}, "
+                f"всего уникальных: {len(merged)}"
+            )
+        else:
+            logger.warning(
+                f"[SEARCH] Jamendo не дал треков для «{query}», в ответе только БД ({len(merged)})"
+            )
+
+    playable = [t for t in merged if _is_playable_track_dict(t)]
+    logger.info(
+        f"[SEARCH] Поиск «{query}»: итого {min(len(playable), limit)} воспроизводимых треков "
+        f"(в merged: {len(merged)})"
+    )
+    return playable[:limit]
 
 
 def _track_to_response_dict(track: Track, artist_name: Optional[str]) -> dict:

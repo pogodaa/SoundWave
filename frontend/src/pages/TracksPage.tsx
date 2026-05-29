@@ -1,15 +1,17 @@
 // frontend/src/pages/TracksPage.tsx — Финальная стабильная версия
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Search, RefreshCw, Loader2 } from 'lucide-react';
-import { tracksApi } from '../api/tracks';
+import { tracksApi, SEARCH_TRACKS_LIMIT } from '../api/tracks';
 import { Track } from '../types/track';
 import TrackCard from '../components/TrackCard';
 import { usePlayer } from '../store/playerStore';
 import { useTracksStore } from '../store/tracksStore';
 import { useLikedTracksStore } from '../store/likedTracksStore';
 
+const SEARCH_DEBOUNCE_MS = 500;
+
 export default function TracksPage() {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchInput, setSearchInput] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchResults, setSearchResults] = useState<Track[] | null>(null);
 
@@ -37,19 +39,25 @@ export default function TracksPage() {
     }
   }, [isLoaded, fetchPopularTracks]);
 
-  const handleSearch = async (query: string) => {
-    setSearchQuery(query);
-    if (!query.trim()) {
+  // Поиск с debounce: запрос только через 0.5 с после остановки ввода
+  useEffect(() => {
+    const query = searchInput.trim();
+    if (!query) {
       setSearchResults(null);
       return;
     }
-    try {
-      const results = await tracksApi.search(query);
-      setSearchResults(results.filter((track) => track.is_available !== false));
-    } catch (error) {
-      console.error('Ошибка поиска:', error);
-    }
-  };
+
+    const timer = setTimeout(async () => {
+      try {
+        const results = await tracksApi.search(query, SEARCH_TRACKS_LIMIT);
+        setSearchResults(results.filter((track) => track.is_available !== false));
+      } catch (error) {
+        console.error('Ошибка поиска:', error);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   const displayTracks = searchResults ?? tracks;
   useEffect(() => {
@@ -60,7 +68,7 @@ export default function TracksPage() {
     setIsRefreshing(true);
     clearPopularCache();
     setSearchResults(null);
-    setSearchQuery('');
+    setSearchInput('');
     await fetchPopularTracks(true);
     setIsRefreshing(false);
   }, [clearPopularCache, fetchPopularTracks]);
@@ -75,7 +83,7 @@ export default function TracksPage() {
         <Loader2 className="w-14 h-14 text-blue-400 animate-spin mb-6" />
         <h2 className="text-3xl font-bold text-white mb-3">Загружаем треки...</h2>
         <p className="max-w-md text-gray-400 text-lg leading-relaxed">
-          Первая загрузка списка популярных треков.
+          Загрузка списка случайных треков.
         </p>
       </div>
     );
@@ -86,7 +94,7 @@ export default function TracksPage() {
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-3xl font-bold text-white">Каталог треков</h1>
-          <p className="text-gray-400 mt-1">Рандомные треки</p>
+          <p className="text-gray-400 mt-1">Случайные треки</p>
         </div>
         <button
           onClick={handleRefresh}
@@ -103,8 +111,8 @@ export default function TracksPage() {
         <input
           type="text"
           placeholder="Поиск треков или исполнителей..."
-          value={searchQuery}
-          onChange={(e) => handleSearch(e.target.value)}
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
           className="w-full bg-gray-800 border border-gray-700 focus:border-blue-500 rounded-2xl pl-11 py-4 text-white placeholder-gray-400 outline-none transition"
         />
       </div>

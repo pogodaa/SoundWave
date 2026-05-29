@@ -9,6 +9,9 @@ export interface PlayUrlResponse {
   refreshed: boolean;
 }
 
+/** Лимит треков в результатах поиска (согласован с бэкендом) */
+export const SEARCH_TRACKS_LIMIT = 20;
+
 export const tracksApi = {
   // Получение популярных треков
   getPopular: async (limit: number = 20): Promise<Track[]> => {
@@ -18,8 +21,8 @@ export const tracksApi = {
     return data;
   },
 
-  // Поиск треков
-  search: async (query: string, limit: number = 20): Promise<Track[]> => {
+  // Поиск треков (явно запрашиваем до 20 результатов)
+  search: async (query: string, limit: number = SEARCH_TRACKS_LIMIT): Promise<Track[]> => {
     const { data } = await api.get<Track[]>('/tracks/search', {
       params: { q: query, limit },
     });

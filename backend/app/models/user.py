@@ -20,7 +20,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     
     avatar_url: Mapped[Optional[str]] = mapped_column(
-        String(255), 
+        String(512), 
         default="/avatars/default1.png",
         server_default="/avatars/default1.png",
         nullable=True

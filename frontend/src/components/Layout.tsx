@@ -2,13 +2,15 @@
 import { memo } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../store/auth';
-import { Music, User, Heart, UserCircle } from 'lucide-react';
+import { Music, User, Heart, UserCircle, Sparkles } from 'lucide-react';
 import Player from './player/Player';
 
 // Мемоизация: предотвращает перерисовку Layout при изменении состояния внутри страниц
 const Layout = memo(function Layout() {
   const { user } = useAuth();
   const navigate = useNavigate();
+
+  const headerAvatarUrl = user?.avatar_url;
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
@@ -43,6 +45,13 @@ const Layout = memo(function Layout() {
                   Треки
                 </button>
                 <button
+                  onClick={() => navigate('/recommendations')}
+                  className="text-gray-300 hover:text-white transition px-3 py-2 rounded-md text-sm font-medium flex items-center gap-1.5"
+                >
+                  <Sparkles className="w-4 h-4 text-purple-400" />
+                  Рекомендации
+                </button>
+                <button
                   onClick={() => navigate('/playlists')}
                   className="text-gray-300 hover:text-white transition px-3 py-2 rounded-md text-sm font-medium"
                 >
@@ -65,13 +74,25 @@ const Layout = memo(function Layout() {
               </nav>
             </div>
 
-            {/* Правая часть: переход в профиль */}
+            {/* Правая часть: аватар и переход в профиль */}
             <button
               type="button"
               onClick={() => navigate('/profile')}
-              className="flex items-center text-gray-300 hover:text-white transition px-3 py-2 rounded-lg hover:bg-gray-700"
+              className="flex items-center gap-2 text-gray-300 hover:text-white transition px-3 py-2 rounded-lg hover:bg-gray-700"
             >
-              <User className="h-5 w-5 mr-2" />
+              <div className="w-8 h-8 rounded-full bg-gray-700 border border-gray-600 overflow-hidden flex items-center justify-center shrink-0">
+                {headerAvatarUrl ? (
+                  <img
+                    src={headerAvatarUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                    }}
+                  />
+                ) : null}
+                <User className="w-4 h-4 text-gray-400" />
+              </div>
               <span className="text-sm font-medium">{user?.username ?? 'Профиль'}</span>
             </button>
           </div>

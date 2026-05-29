@@ -1,6 +1,8 @@
 # backend/app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from contextlib import asynccontextmanager
 import logging
 
@@ -8,7 +10,7 @@ import logging
 from .core.config import settings
 from .db.session import engine
 from .db.base import Base
-from .api.v1 import auth, users, tracks, playlists, interactions
+from .api.v1 import auth, users, tracks, playlists, interactions, recommendations
 
 # Настройка логгера
 logging.basicConfig(
@@ -61,6 +63,13 @@ app.include_router(users.router, prefix="/api/v1")
 app.include_router(tracks.router, prefix="/api/v1")
 app.include_router(playlists.router, prefix="/api/v1")
 app.include_router(interactions.router, prefix="/api/v1")
+app.include_router(recommendations.router, prefix="/api/v1")
+
+# Раздача загруженных аватаров
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+(STATIC_DIR / "avatars").mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Эндпоинт проверки здоровья сервиса
 @app.get("/health")

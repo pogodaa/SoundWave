@@ -10,6 +10,7 @@ import PlaylistsPage from '../pages/PlaylistsPage';
 import PlaylistDetailPage from '../pages/PlaylistDetailPage';
 import LikedPage from '../pages/LikedPage';
 import ProfilePage from '../pages/ProfilePage';
+import RecommendationsPage from '../pages/RecommendationsPage';
 // <-- Сюда потом импортируем PlaylistsPage, HistoryPage и др.
 
 export const router = createBrowserRouter([
@@ -32,6 +33,7 @@ export const router = createBrowserRouter([
         children: [
           { path: '/', element: <HomePage /> },
           { path: '/tracks', element: <TracksPage /> },
+          { path: '/recommendations', element: <RecommendationsPage /> },
           { path: '/playlists', element: <PlaylistsPage /> },
           { path: '/playlists/:playlistId', element: <PlaylistDetailPage /> },
           { path: '/liked', element: <LikedPage /> },

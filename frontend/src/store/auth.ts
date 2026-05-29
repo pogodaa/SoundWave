@@ -6,6 +6,7 @@ interface User {
   username: string
   email: string
   role: string
+  avatar_url: string
 }
 
 interface AuthState {
@@ -17,6 +18,7 @@ interface AuthState {
   login: (username: string, password: string) => Promise<boolean>
   logout: () => void
   checkAuth: () => Promise<void>
+  updateAvatar: (avatarUrl: string) => void
 }
 
 export const useAuth = create<AuthState>((set, get) => ({
@@ -108,5 +110,11 @@ export const useAuth = create<AuthState>((set, get) => ({
         error: null 
       })
     }
+  },
+
+  updateAvatar: (avatarUrl: string) => {
+    set((state) => ({
+      user: state.user ? { ...state.user, avatar_url: avatarUrl } : null,
+    }))
   },
 }))

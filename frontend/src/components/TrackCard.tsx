@@ -103,6 +103,7 @@ const TrackCard = ({
           : 'border-gray-700 hover:border-gray-600'
       }`}
     >
+      {/* Верх: обложка + название и исполнитель */}
       <div className="flex items-start gap-4">
         <div className="relative flex-shrink-0">
           <img
@@ -123,10 +124,21 @@ const TrackCard = ({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 gap-y-1">
-            <h3 className="font-semibold text-white truncate" title={track.title}>
-              {track.title}
-            </h3>
+          <div className="flex items-start gap-2 min-w-0">
+            <div className="min-w-0 flex-1">
+              <h3
+                className="text-xl font-bold text-white line-clamp-1"
+                title={track.title}
+              >
+                {track.title}
+              </h3>
+              <p
+                className="text-sm text-gray-400 line-clamp-1 mt-0.5"
+                title={track.artist_name}
+              >
+                {track.artist_name}
+              </p>
+            </div>
             {unavailable && (
               <span className="inline-flex items-center gap-1 shrink-0 text-xs px-2 py-0.5 rounded bg-amber-900/70 text-amber-200 border border-amber-700/50">
                 <AlertCircle className="w-3.5 h-3.5" />
@@ -134,22 +146,23 @@ const TrackCard = ({
               </span>
             )}
           </div>
-          <p className="text-sm text-gray-400 truncate" title={track.artist_name}>
-            {track.artist_name}
-          </p>
-          {track.genre ? (
-            <span className="inline-block mt-1 px-2 py-0.5 text-xs bg-gray-700 text-gray-300 rounded">
-              {track.genre}
-            </span>
-          ) : (
-            <span className="inline-block mt-1 px-2 py-0.5 text-xs bg-gray-700/50 text-gray-500 rounded">
-              Жанр не указан
-            </span>
-          )}
         </div>
+      </div>
 
-        <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-          <span className="text-sm text-gray-400 flex items-center mr-1">
+      {/* Подвал: жанр, длительность и действия */}
+      <div className="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-gray-700/80">
+        {track.genre ? (
+          <span className="px-2 py-0.5 text-xs bg-gray-700 text-gray-300 rounded truncate max-w-[45%]">
+            {track.genre}
+          </span>
+        ) : (
+          <span className="px-2 py-0.5 text-xs bg-gray-700/50 text-gray-500 rounded">
+            Жанр не указан
+          </span>
+        )}
+
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-sm text-gray-400 flex items-center">
             <Clock className="w-4 h-4 mr-1" />
             {formatDuration(track.duration)}
           </span>
